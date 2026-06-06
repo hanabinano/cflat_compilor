@@ -17,7 +17,7 @@ C♭ 源代码
 -> SemanticAnalyzer 做语义检查
 -> IRGenerator 生成三地址码
 -> VirtualMachine 解释执行
--> 前端展示结果
+-> 前端展示结果 / 时间旅行调试
 ```
 
 ### 已实现内容
@@ -28,9 +28,9 @@ C♭ 源代码
 | Parser / AST | Done | 手写递归下降 Parser，支持表达式优先级。 |
 | SemanticAnalyzer | Done | 检查作用域、类型、函数调用、数组、循环控制和 `main`。 |
 | IRGenerator | Done | 生成便于课程展示的三地址码文本。 |
-| VirtualMachine | Done | 执行 C♭ 程序，支持变量、数组、函数、循环、`printf`。 |
-| REST API | Done | 提供词法分析、语法分析、编译、运行四个接口。 |
-| Frontend | Done | Vue 3 + Monaco Editor，可在线写代码、编译和运行。 |
+| VirtualMachine | Done | 执行 C♭ 程序，支持变量、数组、函数、循环、`printf`、`scanf` 和调试快照。 |
+| REST API | Done | 提供词法分析、语法分析、编译、运行、时间旅行调试接口。 |
+| Frontend | Done | Vue 3 + Monaco Editor，可在线写代码、编译、运行和回放执行过程。 |
 
 ## 快速开始
 
@@ -41,7 +41,7 @@ C♭ 源代码
 - Node.js 20+ 推荐
 - npm 10+
 
-> 如果本机同时安装了多个 JDK，请确保运行后端时 `JAVA_HOME` 指向 JDK 17 或更高版本。
+> 如果本机同时安装了多个 JDK，请确保运行后端时 `JAVA_HOME` 指向 JDK 17 或更高版本。项目使用了 `record`、模式匹配和 `switch ->` 等 Java 17 语法，不能用 Java 8 编译。
 
 ### 1. 克隆项目
 
@@ -54,7 +54,7 @@ cd cflat_compilor
 
 ```bash
 cd backend
-mvn spring-boot:run
+JAVA_HOME=$(/usr/libexec/java_home) mvn clean spring-boot:run
 ```
 
 后端默认运行在：
@@ -63,10 +63,10 @@ mvn spring-boot:run
 http://localhost:8080
 ```
 
-如果需要临时指定 JDK：
+如果已经确认默认 `JAVA_HOME` 是 JDK 17 或更高版本，也可以直接运行：
 
 ```bash
-JAVA_HOME=$(/usr/libexec/java_home) mvn spring-boot:run
+mvn clean spring-boot:run
 ```
 
 ### 3. 启动前端
@@ -94,7 +94,7 @@ http://localhost:5173
 - 左侧：C♭ 代码编辑器。
 - 右侧：标准输入、输出结果、错误信息。
 
-工具栏包含四个按钮：
+工具栏包含五个按钮：
 
 | 按钮 | 作用 |
 | --- | --- |
@@ -102,8 +102,28 @@ http://localhost:5173
 | 语法分析 | 调用 `/api/parser`，显示 AST。 |
 | 编译 | 调用 `/api/compile`，显示三地址码。 |
 | 编译并运行 | 调用 `/api/run`，显示 stdout、stderr、exitCode 和 IR。 |
+| 时间旅行 | 调用 `/api/debug`，录制 VM 执行过程并可前进、后退、定格任意一步。 |
 
 页面内置了示例程序，可以从右上角下拉框切换。
+
+### 时间旅行调试
+
+普通调试器通常只能向前单步，过了某一步就很难回到当时的现场。C♭ 的 VM 是解释执行的，所以可以在执行时把整个过程“录像”：每执行一条关键 IR，就保存当前函数、当前 IR、动作标签、变量表和累计输出。
+
+答辩演示流程：
+
+1. 选择或编写一段带循环的 C♭ 代码。
+2. 点击工具栏的「时间旅行」。
+3. 右侧出现时间线滑块、`⏮ / ◀ / ▶ / ⏭` 播放控制和 `第 X / N 步` 计数。
+4. 拖动滑块或点击播放，可以实时查看：
+   - 当前所在函数。
+   - 当前执行的 IR。
+   - 动作标签，例如 `声明 arr[6]`、`赋值 sum`、`输出`。
+   - 每一步所有变量的值，刚刚变化的变量会高亮。
+   - 当前累计 stdout。
+   - 数组以 `[0, 1, 4]` 这种形式展示。
+
+这点很适合课程展示：GDB 的 reverse-debug 比较重也冷门，而 C♭ 自己的解释执行 VM 天然适合做执行快照，演示效果直观，实现也保持在 VM 内部。
 
 ## C♭ 语言说明
 
@@ -115,6 +135,7 @@ http://localhost:5173
 | `char` | 字符 |
 | `bool` | 布尔值，取值为 `true` 或 `false` |
 | `void` | 无返回值，只用于函数返回类型 |
+| string literal | 字符串字面量，目前主要用于 `printf` 格式串 |
 
 ### 支持的语法
 
@@ -124,13 +145,16 @@ http://localhost:5173
 - 函数定义：`int add(int a, int b) { return a + b; }`
 - 主函数：`int main() { ... }`
 - 算术运算：`+`、`-`、`*`、`/`、`%`
+- 自增自减：`i++`、`++i`、`i--`、`--i`
+- 复合赋值：`+=`、`-=`、`*=`、`/=`、`%=`
 - 关系运算：`<`、`<=`、`>`、`>=`、`==`、`!=`
 - 逻辑运算：`&&`、`||`、`!`
 - 控制流：`if` / `else`、`while`、`for`
 - 循环控制：`break`、`continue`
 - 返回语句：`return`
 - 函数调用
-- 简化输出：`printf(expr);`
+- 输出：`printf(expr);` 和简化格式化输出 `printf("%d %c\n", a, ch);`
+- 输入：`scanf(a, arr[i]);`，从标准输入框按空白读取整数
 - 注释：`//` 和 `/* */`
 
 ### 暂不支持
@@ -139,9 +163,8 @@ http://localhost:5173
 - 指针
 - 结构体
 - 多文件编译
-- 字符串字面量
-- 复杂格式化输出
-- `scanf`
+- 完整 C 标准库
+- `scanf` 格式字符串和地址操作符 `&`
 
 ## 示例程序
 
@@ -213,6 +236,52 @@ int main() {
 
 ```text
 40
+```
+
+### scanf 和格式化 printf
+
+```c
+int main() {
+    int a;
+    int b;
+    scanf(a, b);
+    printf("%d + %d = %d\n", a, b, a + b);
+    return 0;
+}
+```
+
+标准输入：
+
+```text
+3 5
+```
+
+输出：
+
+```text
+3 + 5 = 8
+```
+
+### 时间旅行调试示例
+
+```c
+int main() {
+    int sum = 0;
+    int i;
+
+    for (i = 1; i <= 5; i++) {
+        sum += i;
+    }
+
+    printf("sum = %d\n", sum);
+    return 0;
+}
+```
+
+点击「时间旅行」后，可以拖动时间线观察 `i` 和 `sum` 的变化过程。`sum` 每次被重新赋值时会高亮，最终输出为：
+
+```text
+sum = 15
 ```
 
 ## REST API
@@ -300,6 +369,39 @@ curl -X POST http://localhost:8080/api/run \
 }
 ```
 
+### POST `/api/debug`
+
+执行完整编译流程并录制 VM 执行快照，用于前端时间旅行调试。
+
+```bash
+curl -X POST http://localhost:8080/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"code":"int main(){ int sum = 0; int i; for(i = 1; i <= 5; i++){ sum += i; } printf(\"sum = %d\\n\", sum); return 0; }","stdin":""}'
+```
+
+返回字段：
+
+```json
+{
+  "success": true,
+  "ir": ["function main", "..."],
+  "snapshots": [
+    {
+      "step": 1,
+      "function": "main",
+      "line": "declare int sum",
+      "action": "声明 sum",
+      "variables": [
+        { "name": "sum", "type": "int", "value": "0", "array": false }
+      ],
+      "stdout": ""
+    }
+  ],
+  "truncated": false,
+  "exitCode": 0
+}
+```
+
 ### 错误响应
 
 ```json
@@ -329,7 +431,7 @@ int char bool void
 if else while for
 break continue return
 true false
-printf
+printf scanf
 ```
 
 ### 标识符
@@ -345,6 +447,7 @@ digit      = "0"..."9" ;
 ```ebnf
 int_literal  = digit, { digit } ;
 char_literal = "'", char_body, "'" ;
+string_literal = '"', { string_char | escape }, '"' ;
 bool_literal = "true" | "false" ;
 ```
 
@@ -352,6 +455,8 @@ bool_literal = "true" | "false" ;
 
 ```text
 + - * / %
+++ --
++= -= *= /= %=
 < <= > >= == !=
 && || !
 =
@@ -379,16 +484,16 @@ statement            = block
                      | return_statement ;
 
 expression           = assignment ;
-assignment           = logical_or, [ "=", assignment ] ;
+assignment           = logical_or, [ ( "=" | "+=" | "-=" | "*=" | "/=" | "%=" ), assignment ] ;
 logical_or           = logical_and, { "||", logical_and } ;
 logical_and          = equality, { "&&", equality } ;
 equality             = relational, { ( "==" | "!=" ), relational } ;
 relational           = additive, { ( "<" | "<=" | ">" | ">=" ), additive } ;
 additive             = multiplicative, { ( "+" | "-" ), multiplicative } ;
 multiplicative       = unary, { ( "*" | "/" | "%" ), unary } ;
-unary                = ( "!" | "-" | "+" ), unary | postfix ;
-postfix              = primary, { call_suffix | index_suffix } ;
-primary              = identifier | int_literal | char_literal | bool_literal | "(", expression, ")" ;
+unary                = ( "!" | "-" | "+" | "++" | "--" ), unary | postfix ;
+postfix              = primary, { call_suffix | index_suffix | "++" | "--" } ;
+primary              = identifier | int_literal | char_literal | string_literal | bool_literal | "(", expression, ")" ;
 ```
 
 ## 项目结构
@@ -429,8 +534,8 @@ cflat-compiler/
 
 ```bash
 cd backend
-mvn test
-mvn spring-boot:run
+JAVA_HOME=$(/usr/libexec/java_home) mvn test
+JAVA_HOME=$(/usr/libexec/java_home) mvn clean spring-boot:run
 ```
 
 ### 前端
@@ -449,13 +554,17 @@ npm run build
 - Lexer Token 生成。
 - 函数调用编译为 IR。
 - 循环和数组程序运行。
+- `printf` 格式化输出。
+- `scanf` 标准输入。
+- 自增自减和复合赋值。
+- 时间旅行调试快照。
 - 语义错误报告。
 
 运行：
 
 ```bash
 cd backend
-mvn test
+JAVA_HOME=$(/usr/libexec/java_home) mvn test
 ```
 
 前端构建验证：
@@ -467,4 +576,4 @@ npm run build
 
 ## 说明
 
-当前版本已经可以作为课程设计展示版使用。IR 以可读三地址码形式展示，VM 直接基于语义检查后的程序结构执行，以保证教学演示清晰稳定。后续可以继续把 VM 改造成严格解释 IR 指令的版本，并扩展 `scanf`、字符串字面量和更多标准库函数。
+当前版本已经可以作为课程设计展示版使用。IR 以可读三地址码形式展示，VM 负责解释执行 IR，并能在调试模式下记录执行快照。时间旅行调试是这个项目的展示亮点：它把执行过程变成可拖动、可回放、可定格的时间线，让变量变化和输出过程一眼可见。

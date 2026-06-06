@@ -30,3 +30,7 @@ export function compile(code) {
 export function run(code, stdin) {
   return post('/api/run', { code, stdin })
 }
+
+export function debug(code, stdin) {
+  return post('/api/debug', { code, stdin })
+}

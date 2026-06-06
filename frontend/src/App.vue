@@ -66,6 +66,9 @@
           <button class="tool-btn primary" :disabled="loading" @click="handleAction('run')">
             <Play :size="16" /> 编译并运行 <kbd>⌘↵</kbd>
           </button>
+          <button class="tool-btn" :disabled="loading" @click="handleAction('debug')">
+            <History :size="16" /> 时间旅行
+          </button>
         </div>
 
         <CodeEditor v-model="code" :theme="theme" @run="handleAction('run')" />
@@ -107,7 +110,7 @@
         <!-- stdin -->
         <div class="stdin-wrap">
           <div class="stdin-label"><TerminalSquare :size="14" /> 标准输入</div>
-          <textarea v-model="stdin" class="stdin" spellcheck="false" placeholder="scanf 后续版本启用…" />
+          <textarea v-model="stdin" class="stdin" spellcheck="false" placeholder="scanf 从这里按空白/换行读取输入，例如：3 5" />
         </div>
 
         <!-- output -->
@@ -163,7 +166,7 @@
             <pre v-else-if="activeTab === 'compile'" key="compile" class="code-out">{{ results.compile }}</pre>
 
             <!-- run -->
-            <div v-else key="run" class="run-grid">
+            <div v-else-if="activeTab === 'run'" key="run" class="run-grid">
               <div class="run-block" :class="{ empty: !results.run.stdout }">
                 <div class="run-block-head"><Terminal :size="13" /> stdout</div>
                 <pre>{{ results.run.stdout || '(empty)' }}</pre>
@@ -181,6 +184,70 @@
                 <pre>{{ results.run.ir }}</pre>
               </div>
             </div>
+
+            <!-- debug / time travel -->
+            <div v-else key="debug" class="debug-view">
+              <div class="tt-controls">
+                <button class="tt-btn" :disabled="debugStep <= 0" @click="stepTo(0)" title="回到开始">
+                  <SkipBack :size="15" />
+                </button>
+                <button class="tt-btn" :disabled="debugStep <= 0" @click="stepTo(debugStep - 1)" title="上一步">
+                  <ChevronLeft :size="15" />
+                </button>
+                <button class="tt-btn play" @click="togglePlay" :title="playing ? '暂停' : '播放'">
+                  <component :is="playing ? Pause : Play" :size="15" />
+                </button>
+                <button class="tt-btn" :disabled="debugStep >= lastStep" @click="stepTo(debugStep + 1)" title="下一步">
+                  <ChevronRight :size="15" />
+                </button>
+                <button class="tt-btn" :disabled="debugStep >= lastStep" @click="stepTo(lastStep)" title="跳到结束">
+                  <SkipForward :size="15" />
+                </button>
+                <input
+                  class="tt-slider"
+                  type="range"
+                  min="0"
+                  :max="lastStep"
+                  :value="debugStep"
+                  @input="stepTo(Number($event.target.value))"
+                />
+                <span class="tt-counter">{{ debugStep + 1 }} / {{ debugTrace.length }}</span>
+              </div>
+
+              <div v-if="currentSnapshot" class="tt-body">
+                <div class="tt-meta">
+                  <span class="tt-chip"><Hash :size="12" /> {{ currentSnapshot.function }}()</span>
+                  <span class="tt-chip action">{{ currentSnapshot.action }}</span>
+                  <code class="tt-line">{{ currentSnapshot.line }}</code>
+                </div>
+
+                <div class="tt-vars">
+                  <div class="tt-vars-head">变量状态</div>
+                  <div v-if="currentSnapshot.variables.length === 0" class="tt-vars-empty">
+                    （这一刻还没有变量）
+                  </div>
+                  <div
+                    v-for="v in currentSnapshot.variables"
+                    :key="v.name"
+                    class="tt-var"
+                    :class="{ changed: changedVars.has(v.name) }"
+                  >
+                    <span class="tt-var-name">{{ v.name }}</span>
+                    <span class="tt-var-type">{{ v.type }}{{ v.array ? '[]' : '' }}</span>
+                    <span class="tt-var-value">{{ v.value }}</span>
+                  </div>
+                </div>
+
+                <div class="tt-stdout">
+                  <div class="tt-vars-head"><Terminal :size="12" /> 此刻的输出</div>
+                  <pre>{{ currentSnapshot.stdout || '(尚无输出)' }}</pre>
+                </div>
+
+                <div v-if="debugTruncated" class="tt-warn">
+                  <AlertTriangle :size="13" /> 执行步数过多，时间线已截断到前 {{ debugTrace.length }} 步。
+                </div>
+              </div>
+            </div>
           </Transition>
         </div>
       </aside>
@@ -189,11 +256,12 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import {
   Activity, AlertTriangle, Binary, Braces, Check, CheckCircle2, Code2,
   CornerDownRight, FileCode2, ListTree, Loader2, Moon, Play, Sun,
-  Terminal, TerminalSquare
+  Terminal, TerminalSquare, History, SkipBack, SkipForward,
+  ChevronLeft, ChevronRight, Pause, Hash
 } from 'lucide-vue-next'
 import CodeEditor from './components/CodeEditor.vue'
 import AstTree from './components/AstTree.vue'
@@ -228,19 +296,134 @@ const tabs = [
   { id: 'lexer', label: 'Tokens', icon: ListTree },
   { id: 'parser', label: 'AST', icon: Braces },
   { id: 'compile', label: 'IR', icon: Binary },
-  { id: 'run', label: '运行', icon: Play }
+  { id: 'run', label: '运行', icon: Play },
+  { id: 'debug', label: '时间旅行', icon: History }
 ]
 const tabMeta = {
   lexer: { title: '词法分析 · Tokens', icon: ListTree },
   parser: { title: '语法树 · AST', icon: Braces },
   compile: { title: '三地址码 · IR', icon: Binary },
-  run: { title: '程序运行结果', icon: Play }
+  run: { title: '程序运行结果', icon: Play },
+  debug: { title: '时间旅行调试 · Time Travel', icon: History }
 }
-const activeTab = ref('run')
+const activeTab = ref('debug')
 const activeTabMeta = computed(() => tabMeta[activeTab.value])
 
 /* ---------- examples ---------- */
 const examples = [
+  {
+    name: '⏳ 时间旅行 · 冒泡排序',
+    code: `int main() {
+    int arr[6];
+    arr[0] = 5;
+    arr[1] = 2;
+    arr[2] = 8;
+    arr[3] = 1;
+    arr[4] = 9;
+    arr[5] = 3;
+
+    int i;
+    int j;
+    int temp;
+
+    for (i = 0; i < 5; i++) {
+        for (j = 0; j < 5 - i; j++) {
+            if (arr[j] > arr[j + 1]) {
+                temp = arr[j];
+                arr[j] = arr[j + 1];
+                arr[j + 1] = temp;
+            }
+        }
+    }
+
+    for (i = 0; i < 6; i++) {
+        printf("%d ", arr[i]);
+    }
+    printf("\\n");
+    return 0;
+}`
+  },
+  {
+    name: '⏳ 时间旅行 · 斐波那契滚动',
+    code: `int main() {
+    int prev = 0;
+    int curr = 1;
+    int next;
+    int i;
+
+    for (i = 0; i < 10; i++) {
+        printf("%d ", prev);
+        next = prev + curr;
+        prev = curr;
+        curr = next;
+    }
+    printf("\\n");
+    return 0;
+}`
+  },
+  {
+    name: '⏳ 时间旅行 · 累加求和',
+    code: `int main() {
+    int sum = 0;
+    int i;
+
+    for (i = 1; i <= 5; i++) {
+        sum += i;
+    }
+
+    printf("sum = %d\\n", sum);
+    return 0;
+}`
+  },
+  {
+    name: 'scanf 输入求和',
+    stdin: '3 5',
+    code: `int main() {
+    int a;
+    int b;
+    scanf(a, b);
+    printf("%d + %d = %d\\n", a, b, a + b);
+    return 0;
+}`
+  },
+  {
+    name: 'printf 格式化',
+    code: `int main() {
+    int year = 2026;
+    char grade = 'A';
+    printf("year=%d grade=%c\\n", year, grade);
+    printf("%d%% done\\n", 100);
+    return 0;
+}`
+  },
+  {
+    name: '自增与复合赋值',
+    code: `int main() {
+    int sum = 0;
+    int i;
+    for (i = 0; i < 5; i++) {
+        sum += i;
+    }
+    sum *= 2;
+    printf("sum = %d\\n", sum);
+    return 0;
+}`
+  },
+  {
+    name: 'scanf 数组平均',
+    stdin: '10 20 30 40',
+    code: `int main() {
+    int data[4];
+    int i;
+    int total = 0;
+    for (i = 0; i < 4; i++) {
+        scanf(data[i]);
+        total += data[i];
+    }
+    printf("avg = %d\\n", total / 4);
+    return 0;
+}`
+  },
   {
     name: '循环与数组',
     code: `int main() {
@@ -321,7 +504,7 @@ int main() {
 
 const selectedExample = ref(examples[0].name)
 const code = ref(examples[0].code)
-const stdin = ref('')
+const stdin = ref(examples[0].stdin || '')
 const loading = ref(false)
 const hasError = ref(false)
 const errorPayload = ref(null)
@@ -329,7 +512,65 @@ const activeStage = ref('')
 const completedStages = ref([])
 
 /* results cache per tab */
-const results = ref({ lexer: null, parser: null, compile: null, run: null })
+const results = ref({ lexer: null, parser: null, compile: null, run: null, debug: null })
+
+/* ---------- time-travel debugging ---------- */
+const debugTrace = ref([])
+const debugStep = ref(0)
+const debugTruncated = ref(false)
+const playing = ref(false)
+let playTimer = null
+
+const lastStep = computed(() => Math.max(0, debugTrace.value.length - 1))
+const currentSnapshot = computed(() => debugTrace.value[debugStep.value] || null)
+const changedVars = computed(() => {
+  const changed = new Set()
+  if (debugStep.value <= 0) return changed
+  const prev = debugTrace.value[debugStep.value - 1]
+  const cur = debugTrace.value[debugStep.value]
+  if (!prev || !cur) return changed
+  const prevMap = new Map(prev.variables.map(v => [v.name, v.value]))
+  for (const v of cur.variables) {
+    if (!prevMap.has(v.name) || prevMap.get(v.name) !== v.value) {
+      changed.add(v.name)
+    }
+  }
+  return changed
+})
+
+function stepTo(index) {
+  const clamped = Math.min(Math.max(0, index), lastStep.value)
+  debugStep.value = clamped
+  if (clamped >= lastStep.value) {
+    stopPlay()
+  }
+}
+
+function togglePlay() {
+  if (playing.value) {
+    stopPlay()
+  } else {
+    if (debugStep.value >= lastStep.value) debugStep.value = 0
+    playing.value = true
+    playTimer = setInterval(() => {
+      if (debugStep.value >= lastStep.value) {
+        stopPlay()
+      } else {
+        debugStep.value++
+      }
+    }, 600)
+  }
+}
+
+function stopPlay() {
+  playing.value = false
+  if (playTimer) {
+    clearInterval(playTimer)
+    playTimer = null
+  }
+}
+
+onBeforeUnmount(stopPlay)
 
 const statusText = computed(() => {
   if (loading.value) return '处理中'
@@ -350,7 +591,7 @@ const lexerTree = computed(() => {
     { name: 'keywords', label: '关键字 Keywords', short: '关键字', m: t => t.type.startsWith('KW_') },
     { name: 'identifiers', label: '标识符 Identifiers', short: '标识符', m: t => t.type === 'IDENTIFIER' },
     { name: 'literals', label: '字面量 Literals', short: '字面量', m: t => t.type.endsWith('_LITERAL') },
-    { name: 'operators', label: '运算符 Operators', short: '运算符', m: t => ['PLUS','MINUS','STAR','SLASH','PERCENT','LT','LTE','GT','GTE','EQEQ','NEQ','ANDAND','OROR','BANG','ASSIGN'].includes(t.type) },
+    { name: 'operators', label: '运算符 Operators', short: '运算符', m: t => ['PLUS','MINUS','STAR','SLASH','PERCENT','LT','LTE','GT','GTE','EQEQ','NEQ','ANDAND','OROR','BANG','ASSIGN','PLUSPLUS','MINUSMINUS','PLUSEQ','MINUSEQ','STAREQ','SLASHEQ','PERCENTEQ'].includes(t.type) },
     { name: 'delimiters', label: '分隔符 Delimiters', short: '分隔符', m: t => ['LPAREN','RPAREN','LBRACE','RBRACE','LBRACKET','RBRACKET','SEMICOLON','COMMA'].includes(t.type) },
     { name: 'eof', label: '结束符 EOF', short: 'EOF', m: t => t.type === 'EOF' }
   ].map(g => ({ ...g, tokens: tokens.filter(g.m) }))
@@ -361,6 +602,7 @@ function loadExample() {
   const found = examples.find(i => i.name === selectedExample.value)
   if (found) {
     code.value = found.code
+    stdin.value = found.stdin || ''
     resetResults()
   }
 }
@@ -370,7 +612,11 @@ function resetResults() {
   errorPayload.value = null
   activeStage.value = ''
   completedStages.value = []
-  results.value = { lexer: null, parser: null, compile: null, run: null }
+  results.value = { lexer: null, parser: null, compile: null, run: null, debug: null }
+  stopPlay()
+  debugTrace.value = []
+  debugStep.value = 0
+  debugTruncated.value = false
 }
 
 async function handleAction(type) {
@@ -385,6 +631,7 @@ async function handleAction(type) {
       type === 'lexer' ? await compilerApi.lex(code.value)
       : type === 'parser' ? await compilerApi.parse(code.value)
       : type === 'compile' ? await compilerApi.compile(code.value)
+      : type === 'debug' ? await compilerApi.debug(code.value, stdin.value)
       : await compilerApi.run(code.value, stdin.value)
 
     if (!result.ok) {
@@ -401,6 +648,13 @@ async function handleAction(type) {
     } else if (type === 'compile') {
       results.value.compile = p.ir.join('\n')
       completedStages.value = ['lexer', 'parser', 'semantic', 'ir']
+    } else if (type === 'debug') {
+      stopPlay()
+      debugTrace.value = p.snapshots || []
+      debugTruncated.value = !!p.truncated
+      debugStep.value = 0
+      results.value.debug = { steps: debugTrace.value.length }
+      completedStages.value = ['lexer', 'parser', 'semantic', 'ir', 'vm']
     } else {
       results.value.run = {
         stdout: p.stdout, stderr: p.stderr, exitCode: p.exitCode, ir: p.ir.join('\n')

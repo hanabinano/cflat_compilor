@@ -131,6 +131,9 @@ public class SemanticAnalyzer {
         if (expression instanceof Ast.Literal literal) {
             return literal.type();
         }
+        if (expression instanceof Ast.StringLiteral) {
+            return Ast.Type.STRING;
+        }
         if (expression instanceof Ast.Variable variable) {
             Symbol symbol = scope.resolve(variable.name());
             if (symbol == null) {
@@ -191,10 +194,11 @@ public class SemanticAnalyzer {
         }
         if (expression instanceof Ast.Call call) {
             if ("printf".equals(call.callee())) {
-                if (call.arguments().size() != 1) {
-                    fail("printf expects exactly one argument.");
-                }
-                expressionType(call.arguments().get(0));
+                checkPrintf(call);
+                return Ast.Type.VOID;
+            }
+            if ("scanf".equals(call.callee())) {
+                checkScanf(call);
                 return Ast.Type.VOID;
             }
             Ast.FunctionDef function = functions.get(call.callee());
@@ -253,6 +257,78 @@ public class SemanticAnalyzer {
             return;
         }
         fail("Type mismatch: cannot assign " + value + " to " + target + ".");
+    }
+
+    private void checkPrintf(Ast.Call call) {
+        if (call.arguments().isEmpty()) {
+            fail("printf expects at least one argument.");
+        }
+        Ast.Expression first = call.arguments().get(0);
+        if (first instanceof Ast.StringLiteral format) {
+            int specifiers = countFormatSpecifiers(format.value());
+            int provided = call.arguments().size() - 1;
+            if (specifiers != provided) {
+                fail("printf format expects " + specifiers + " argument(s) but got " + provided + ".");
+            }
+            for (int i = 1; i < call.arguments().size(); i++) {
+                Ast.Type type = expressionType(call.arguments().get(i));
+                if (type == Ast.Type.VOID || type == Ast.Type.STRING) {
+                    fail("printf argument " + i + " must be a value.");
+                }
+            }
+            return;
+        }
+        if (call.arguments().size() != 1) {
+            fail("printf without a format string expects exactly one argument.");
+        }
+        Ast.Type type = expressionType(first);
+        if (type == Ast.Type.VOID) {
+            fail("printf cannot print a void value.");
+        }
+    }
+
+    private int countFormatSpecifiers(String format) {
+        int count = 0;
+        for (int i = 0; i < format.length(); i++) {
+            if (format.charAt(i) == '%' && i + 1 < format.length()) {
+                char spec = format.charAt(++i);
+                if (spec == '%') {
+                    continue;
+                }
+                if (spec != 'd' && spec != 'c' && spec != 's') {
+                    fail("Unsupported printf format specifier: %" + spec);
+                }
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private void checkScanf(Ast.Call call) {
+        if (call.arguments().isEmpty()) {
+            fail("scanf expects at least one target.");
+        }
+        for (Ast.Expression argument : call.arguments()) {
+            Ast.Type type;
+            if (argument instanceof Ast.Variable variable) {
+                Symbol symbol = scope.resolve(variable.name());
+                if (symbol == null) {
+                    fail("Undefined variable: " + variable.name());
+                }
+                if (symbol.array()) {
+                    fail("scanf target requires an index: " + variable.name());
+                }
+                type = symbol.type();
+            } else if (argument instanceof Ast.ArrayAccess access) {
+                type = expressionType(access);
+            } else {
+                fail("scanf target must be a variable or array element.");
+                return;
+            }
+            if (type != Ast.Type.INT && type != Ast.Type.CHAR && type != Ast.Type.BOOL) {
+                fail("scanf can only read numeric or boolean targets.");
+            }
+        }
     }
 
     private void fail(String message) {

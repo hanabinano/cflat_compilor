@@ -1,6 +1,7 @@
 package com.example.cflat.dto;
 
 import com.example.cflat.compiler.lexer.Token;
+import com.example.cflat.compiler.vm.DebugTrace;
 
 import java.util.List;
 
@@ -21,5 +22,9 @@ public final class ApiResponses {
     }
 
     public record RunResponse(boolean success, List<String> ir, String stdout, String stderr, int exitCode) {
+    }
+
+    public record DebugResponse(boolean success, List<String> ir,
+                                List<DebugTrace.Snapshot> snapshots, boolean truncated, int exitCode) {
     }
 }

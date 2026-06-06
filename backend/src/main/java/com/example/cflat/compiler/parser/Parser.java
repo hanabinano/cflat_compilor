@@ -167,6 +167,22 @@ public class Parser {
             Ast.Expression value = assignment();
             return new Ast.Assign(expr, value);
         }
+        if (match(TokenType.PLUSEQ, TokenType.MINUSEQ, TokenType.STAREQ,
+                TokenType.SLASHEQ, TokenType.PERCENTEQ)) {
+            Token op = previous();
+            if (!(expr instanceof Ast.Variable) && !(expr instanceof Ast.ArrayAccess)) {
+                error("Left side of '" + op.lexeme() + "' must be a variable or array element.", op);
+            }
+            String binOp = switch (op.type()) {
+                case PLUSEQ -> "+";
+                case MINUSEQ -> "-";
+                case STAREQ -> "*";
+                case SLASHEQ -> "/";
+                default -> "%";
+            };
+            Ast.Expression value = assignment();
+            return new Ast.Assign(expr, new Ast.Binary(expr, binOp, value));
+        }
         return expr;
     }
 
@@ -227,7 +243,21 @@ public class Parser {
             Token op = previous();
             return new Ast.Unary(op.lexeme(), unary());
         }
+        if (match(TokenType.PLUSPLUS, TokenType.MINUSMINUS)) {
+            Token op = previous();
+            Ast.Expression target = unary();
+            return desugarIncrement(target, op);
+        }
         return postfix();
+    }
+
+    private Ast.Expression desugarIncrement(Ast.Expression target, Token op) {
+        if (!(target instanceof Ast.Variable) && !(target instanceof Ast.ArrayAccess)) {
+            error("Operand of '" + op.lexeme() + "' must be a variable or array element.", op);
+        }
+        String binOp = op.type() == TokenType.PLUSPLUS ? "+" : "-";
+        Ast.Expression one = new Ast.Literal(1, Ast.Type.INT);
+        return new Ast.Assign(target, new Ast.Binary(target, binOp, one));
     }
 
     private Ast.Expression postfix() {
@@ -254,6 +284,9 @@ public class Parser {
                 Ast.Expression index = expression();
                 consume(TokenType.RBRACKET, "Expected ']' after array index.");
                 expr = new Ast.ArrayAccess(variable.name(), index);
+            } else if (check(TokenType.PLUSPLUS) || check(TokenType.MINUSMINUS)) {
+                Token op = advance();
+                expr = desugarIncrement(expr, op);
             } else {
                 return expr;
             }
@@ -267,13 +300,16 @@ public class Parser {
         if (match(TokenType.CHAR_LITERAL)) {
             return new Ast.Literal(parseChar(previous().lexeme()), Ast.Type.CHAR);
         }
+        if (match(TokenType.STRING_LITERAL)) {
+            return new Ast.StringLiteral(parseString(previous().lexeme()));
+        }
         if (match(TokenType.KW_TRUE)) {
             return new Ast.Literal(true, Ast.Type.BOOL);
         }
         if (match(TokenType.KW_FALSE)) {
             return new Ast.Literal(false, Ast.Type.BOOL);
         }
-        if (match(TokenType.IDENTIFIER, TokenType.KW_PRINTF)) {
+        if (match(TokenType.IDENTIFIER, TokenType.KW_PRINTF, TokenType.KW_SCANF)) {
             return new Ast.Variable(previous().lexeme());
         }
         if (match(TokenType.LPAREN)) {
@@ -299,6 +335,30 @@ public class Parser {
             case '\\' -> '\\';
             default -> body.charAt(1);
         };
+    }
+
+    private String parseString(String text) {
+        String body = text.substring(1, text.length() - 1);
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < body.length(); i++) {
+            char c = body.charAt(i);
+            if (c == '\\' && i + 1 < body.length()) {
+                char next = body.charAt(++i);
+                out.append(switch (next) {
+                    case 'n' -> '\n';
+                    case 't' -> '\t';
+                    case 'r' -> '\r';
+                    case '0' -> '\0';
+                    case '"' -> '"';
+                    case '\'' -> '\'';
+                    case '\\' -> '\\';
+                    default -> next;
+                });
+            } else {
+                out.append(c);
+            }
+        }
+        return out.toString();
     }
 
     private Ast.Type parseType() {

@@ -26,6 +26,7 @@ public class Lexer {
         KEYWORDS.put("true", TokenType.KW_TRUE);
         KEYWORDS.put("false", TokenType.KW_FALSE);
         KEYWORDS.put("printf", TokenType.KW_PRINTF);
+        KEYWORDS.put("scanf", TokenType.KW_SCANF);
     }
 
     private final String source;
@@ -62,10 +63,32 @@ public class Lexer {
             case ']' -> add(TokenType.RBRACKET, "]", startLine, startColumn);
             case ';' -> add(TokenType.SEMICOLON, ";", startLine, startColumn);
             case ',' -> add(TokenType.COMMA, ",", startLine, startColumn);
-            case '+' -> add(TokenType.PLUS, "+", startLine, startColumn);
-            case '-' -> add(TokenType.MINUS, "-", startLine, startColumn);
-            case '*' -> add(TokenType.STAR, "*", startLine, startColumn);
-            case '%' -> add(TokenType.PERCENT, "%", startLine, startColumn);
+            case '+' -> {
+                if (match('+')) {
+                    add(TokenType.PLUSPLUS, "++", startLine, startColumn);
+                } else if (match('=')) {
+                    add(TokenType.PLUSEQ, "+=", startLine, startColumn);
+                } else {
+                    add(TokenType.PLUS, "+", startLine, startColumn);
+                }
+            }
+            case '-' -> {
+                if (match('-')) {
+                    add(TokenType.MINUSMINUS, "--", startLine, startColumn);
+                } else if (match('=')) {
+                    add(TokenType.MINUSEQ, "-=", startLine, startColumn);
+                } else {
+                    add(TokenType.MINUS, "-", startLine, startColumn);
+                }
+            }
+            case '*' -> {
+                boolean two = match('=');
+                add(two ? TokenType.STAREQ : TokenType.STAR, two ? "*=" : "*", startLine, startColumn);
+            }
+            case '%' -> {
+                boolean two = match('=');
+                add(two ? TokenType.PERCENTEQ : TokenType.PERCENT, two ? "%=" : "%", startLine, startColumn);
+            }
             case '!' -> {
                 boolean two = match('=');
                 add(two ? TokenType.NEQ : TokenType.BANG, two ? "!=" : "!", startLine, startColumn);
@@ -98,6 +121,7 @@ public class Lexer {
             }
             case '/' -> scanSlash(startLine, startColumn);
             case '\'' -> scanChar(startLine, startColumn);
+            case '"' -> scanString(startLine, startColumn);
             default -> {
                 if (isDigit(c)) {
                     scanNumber(startLine, startColumn);
@@ -130,6 +154,10 @@ public class Lexer {
                 }
             }
             error("Unterminated block comment.", startLine, startColumn);
+        }
+        if (match('=')) {
+            add(TokenType.SLASHEQ, "/=", startLine, startColumn);
+            return;
         }
         add(TokenType.SLASH, "/", startLine, startColumn);
     }
@@ -173,6 +201,32 @@ public class Lexer {
         }
         value.append('\'');
         add(TokenType.CHAR_LITERAL, value.toString(), startLine, startColumn);
+    }
+
+    private void scanString(int startLine, int startColumn) {
+        StringBuilder value = new StringBuilder("\"");
+        while (true) {
+            if (isAtEnd() || peek() == '\n') {
+                error("Unterminated string literal.", startLine, startColumn);
+            }
+            char c = advance();
+            if (c == '"') {
+                break;
+            }
+            value.append(c);
+            if (c == '\\') {
+                if (isAtEnd() || peek() == '\n') {
+                    error("Unterminated string escape.", startLine, startColumn);
+                }
+                char escaped = advance();
+                if ("ntr0\"'\\".indexOf(escaped) < 0) {
+                    error("Unsupported string escape: \\" + escaped, startLine, startColumn);
+                }
+                value.append(escaped);
+            }
+        }
+        value.append('"');
+        add(TokenType.STRING_LITERAL, value.toString(), startLine, startColumn);
     }
 
     private void add(TokenType type, String lexeme, int tokenLine, int tokenColumn) {

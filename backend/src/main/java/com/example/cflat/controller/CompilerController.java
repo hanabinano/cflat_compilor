@@ -47,6 +47,13 @@ public class CompilerController {
                 bundle.result().stderr(), bundle.result().exitCode());
     }
 
+    @PostMapping("/debug")
+    public ApiResponses.DebugResponse debug(@RequestBody RunRequest request) {
+        CompilerService.DebugBundle bundle = compilerService.debug(request.code(), request.stdin());
+        return new ApiResponses.DebugResponse(true, bundle.ir().instructions(),
+                bundle.trace().snapshots(), bundle.trace().truncated(), bundle.trace().exitCode());
+    }
+
     @ExceptionHandler(CompilerException.class)
     public ResponseEntity<ApiResponses.ErrorResponse> compilerError(CompilerException exception) {
         return ResponseEntity.badRequest().body(new ApiResponses.ErrorResponse(false, exception.stage().name(),

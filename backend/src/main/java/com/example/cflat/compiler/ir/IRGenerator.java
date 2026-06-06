@@ -114,6 +114,9 @@ public class IRGenerator {
             }
             return String.valueOf(value);
         }
+        if (expression instanceof Ast.StringLiteral stringLiteral) {
+            return encodeString(stringLiteral.value());
+        }
         if (expression instanceof Ast.Variable variable) {
             return variable.name();
         }
@@ -145,18 +148,62 @@ public class IRGenerator {
             return value;
         }
         if (expression instanceof Ast.Call call) {
-            for (Ast.Expression argument : call.arguments()) {
-                lines.add("param " + emitExpression(argument));
+            if ("scanf".equals(call.callee())) {
+                for (Ast.Expression target : call.arguments()) {
+                    lines.add("read " + emitLValue(target));
+                }
+                return "void";
             }
             if ("printf".equals(call.callee())) {
-                lines.add("print");
+                boolean formatMode = !call.arguments().isEmpty()
+                        && call.arguments().get(0) instanceof Ast.StringLiteral;
+                if (!formatMode && call.arguments().size() == 1) {
+                    lines.add("param " + emitExpression(call.arguments().get(0)));
+                    lines.add("print");
+                    return "void";
+                }
+                for (Ast.Expression argument : call.arguments()) {
+                    lines.add("param " + emitExpression(argument));
+                }
+                lines.add("printf " + call.arguments().size());
                 return "void";
+            }
+            for (Ast.Expression argument : call.arguments()) {
+                lines.add("param " + emitExpression(argument));
             }
             String temp = temp();
             lines.add(temp + " = call " + call.callee() + ", " + call.arguments().size());
             return temp;
         }
-        return "<?>"; 
+        return "<?>";
+    }
+
+    private String emitLValue(Ast.Expression target) {
+        if (target instanceof Ast.Variable variable) {
+            return variable.name();
+        }
+        if (target instanceof Ast.ArrayAccess access) {
+            return access.array() + "[" + emitExpression(access.index()) + "]";
+        }
+        return "<?>";
+    }
+
+    private String encodeString(String value) {
+        StringBuilder out = new StringBuilder("\"");
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            switch (c) {
+                case '\\' -> out.append("\\\\");
+                case '"' -> out.append("\\\"");
+                case '\n' -> out.append("\\n");
+                case '\t' -> out.append("\\t");
+                case '\r' -> out.append("\\r");
+                case '\0' -> out.append("\\0");
+                default -> out.append(c);
+            }
+        }
+        out.append('"');
+        return out.toString();
     }
 
     private String temp() {

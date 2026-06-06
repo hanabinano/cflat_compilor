@@ -70,13 +70,14 @@ onMounted(() => {
   monaco.languages.setMonarchTokensProvider('cflat', {
     keywords: [
       'int', 'char', 'bool', 'void', 'if', 'else', 'while', 'for',
-      'break', 'continue', 'return', 'true', 'false', 'printf'
+      'break', 'continue', 'return', 'true', 'false', 'printf', 'scanf'
     ],
     tokenizer: {
       root: [
         [/[a-zA-Z_][\w_]*/, { cases: { '@keywords': 'keyword', '@default': 'identifier' } }],
         [/\d+/, 'number'],
         [/'(\\.|[^\\'])'/, 'string'],
+        [/"(\\.|[^\\"])*"/, 'string'],
         [/\/\/.*$/, 'comment'],
         [/\/\*/, 'comment', '@comment'],
         [/[{}()\[\];,]/, 'delimiter'],

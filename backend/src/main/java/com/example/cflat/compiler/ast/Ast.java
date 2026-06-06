@@ -7,7 +7,7 @@ public final class Ast {
     }
 
     public enum Type {
-        INT, CHAR, BOOL, VOID
+        INT, CHAR, BOOL, VOID, STRING
     }
 
     public interface Node {
@@ -59,6 +59,9 @@ public final class Ast {
     }
 
     public record Literal(Object value, Type type) implements Expression {
+    }
+
+    public record StringLiteral(String value) implements Expression {
     }
 
     public record Variable(String name) implements Expression {

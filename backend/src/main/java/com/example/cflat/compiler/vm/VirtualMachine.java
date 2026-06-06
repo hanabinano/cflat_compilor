@@ -12,17 +12,50 @@ import java.util.List;
 import java.util.Map;
 
 public class VirtualMachine {
+    private static final int MAX_TRACE_STEPS = 5000;
+    private static final int MAX_TRACE_INSTRUCTIONS = 200000;
+
     private final Map<String, FunctionBlock> functions = new HashMap<>();
     private final Map<String, Cell> globals = new HashMap<>();
     private final StringBuilder stdout = new StringBuilder();
+    private String input = "";
+    private int inputPos;
+
+    // Time-travel debugging state (null/false when not tracing).
+    private boolean tracing;
+    private List<DebugTrace.Snapshot> snapshots;
+    private boolean truncated;
+    private int executedInstructions;
 
     public VMResult execute(IRProgram program, String stdin) {
         functions.clear();
         globals.clear();
         stdout.setLength(0);
+        input = stdin == null ? "" : stdin;
+        inputPos = 0;
+        tracing = false;
         loadProgram(program.instructions());
         RuntimeValue exit = call("main", List.of());
         return new VMResult(stdout.toString(), "", exit.asInt());
+    }
+
+    /**
+     * Runs the program while recording a snapshot after every meaningful
+     * instruction, producing a rewindable time line for the debugger.
+     */
+    public DebugTrace trace(IRProgram program, String stdin) {
+        functions.clear();
+        globals.clear();
+        stdout.setLength(0);
+        input = stdin == null ? "" : stdin;
+        inputPos = 0;
+        tracing = true;
+        truncated = false;
+        executedInstructions = 0;
+        snapshots = new ArrayList<>();
+        loadProgram(program.instructions());
+        RuntimeValue exit = call("main", List.of());
+        return new DebugTrace(List.copyOf(snapshots), truncated, exit.asInt());
     }
 
     private void loadProgram(List<String> instructions) {
@@ -73,6 +106,9 @@ public class VirtualMachine {
 
         int pc = 0;
         while (pc < function.lines.size()) {
+            if (tracing && ++executedInstructions > MAX_TRACE_INSTRUCTIONS) {
+                fail("调试执行步数过多（可能存在死循环），已中止。");
+            }
             String line = function.lines.get(pc);
             if (line.endsWith(":")) {
                 pc++;
@@ -80,6 +116,7 @@ public class VirtualMachine {
             }
             if (line.startsWith("declare ")) {
                 declare(frame.locals, line);
+                recordSnapshot(frame, function.name, line, declareAction(line));
                 pc++;
                 continue;
             }
@@ -106,14 +143,32 @@ public class VirtualMachine {
                 }
                 RuntimeValue value = frame.pendingParams.removeLast();
                 stdout.append(value.display()).append('\n');
+                recordSnapshot(frame, function.name, line, "输出");
+                pc++;
+                continue;
+            }
+            if (line.startsWith("printf ")) {
+                int argc = Integer.parseInt(line.substring("printf ".length()).trim());
+                executePrintf(frame, argc);
+                recordSnapshot(frame, function.name, line, "输出");
+                pc++;
+                continue;
+            }
+            if (line.startsWith("read ")) {
+                executeRead(frame, line.substring("read ".length()).trim());
+                recordSnapshot(frame, function.name, line, "读取输入 " + line.substring("read ".length()).trim());
                 pc++;
                 continue;
             }
             if (line.startsWith("return")) {
                 String valueText = line.length() == "return".length() ? "" : line.substring("return".length()).trim();
+                recordSnapshot(frame, function.name, line, "返回");
                 return valueText.isEmpty() ? RuntimeValue.of(Ast.Type.INT, 0) : resolveValue(frame, valueText);
             }
             executeAssignment(frame, line);
+            if (!isTempAssignment(line)) {
+                recordSnapshot(frame, function.name, line, assignAction(line));
+            }
             pc++;
         }
         return RuntimeValue.of(Ast.Type.INT, 0);
@@ -204,6 +259,9 @@ public class VirtualMachine {
 
     private RuntimeValue resolveValue(Frame frame, String text) {
         text = text.trim();
+        if (text.length() >= 2 && text.startsWith("\"") && text.endsWith("\"")) {
+            return RuntimeValue.ofString(decodeString(text.substring(1, text.length() - 1)));
+        }
         if ("true".equals(text)) {
             return RuntimeValue.of(Ast.Type.BOOL, 1);
         }
@@ -225,6 +283,195 @@ public class VirtualMachine {
             fail("Array requires an index: " + text);
         }
         return cell.value;
+    }
+
+    private void executePrintf(Frame frame, int argc) {
+        if (frame.pendingParams.size() < argc) {
+            fail("printf does not have enough arguments.");
+        }
+        List<RuntimeValue> args = new ArrayList<>();
+        for (int i = 0; i < argc; i++) {
+            args.add(0, frame.pendingParams.removeLast());
+        }
+        RuntimeValue first = args.get(0);
+        if (first.type() != Ast.Type.STRING) {
+            // Defensive: behaves like legacy single-value print.
+            for (RuntimeValue value : args) {
+                stdout.append(value.display()).append('\n');
+            }
+            return;
+        }
+        String format = first.display();
+        int argIndex = 1;
+        for (int i = 0; i < format.length(); i++) {
+            char c = format.charAt(i);
+            if (c == '%' && i + 1 < format.length()) {
+                char spec = format.charAt(++i);
+                if (spec == '%') {
+                    stdout.append('%');
+                    continue;
+                }
+                if (argIndex >= args.size()) {
+                    fail("printf: missing argument for %" + spec);
+                }
+                RuntimeValue value = args.get(argIndex++);
+                switch (spec) {
+                    case 'd' -> stdout.append(value.asInt());
+                    case 'c' -> stdout.append((char) value.asInt());
+                    case 's' -> stdout.append(value.display());
+                    default -> fail("Unsupported printf specifier: %" + spec);
+                }
+            } else {
+                stdout.append(c);
+            }
+        }
+    }
+
+    private void executeRead(Frame frame, String target) {
+        int value = readNextInt();
+        if (target.endsWith("]")) {
+            ArrayTarget arrayTarget = parseArrayTarget(target);
+            Cell array = frame.resolve(arrayTarget.name);
+            int index = resolveValue(frame, arrayTarget.index).asInt();
+            checkArrayIndex(arrayTarget.name, array, index);
+            array.values.set(index, cast(RuntimeValue.of(Ast.Type.INT, value), array.type));
+            return;
+        }
+        Cell cell = frame.find(target);
+        if (cell == null) {
+            frame.locals.put(target, Cell.scalar(Ast.Type.INT, RuntimeValue.of(Ast.Type.INT, value)));
+            return;
+        }
+        if (cell.array) {
+            fail("scanf target requires an index: " + target);
+        }
+        cell.value = cast(RuntimeValue.of(Ast.Type.INT, value), cell.type);
+    }
+
+    private int readNextInt() {
+        while (inputPos < input.length() && Character.isWhitespace(input.charAt(inputPos))) {
+            inputPos++;
+        }
+        if (inputPos >= input.length()) {
+            fail("scanf: no more input available. 请在“标准输入”框中提供足够的数据。");
+        }
+        int start = inputPos;
+        if (input.charAt(inputPos) == '+' || input.charAt(inputPos) == '-') {
+            inputPos++;
+        }
+        while (inputPos < input.length() && Character.isDigit(input.charAt(inputPos))) {
+            inputPos++;
+        }
+        String token = input.substring(start, inputPos);
+        if (token.isEmpty() || "+".equals(token) || "-".equals(token)) {
+            fail("scanf: expected an integer but found '" + input.charAt(start) + "'.");
+        }
+        try {
+            return Integer.parseInt(token);
+        } catch (NumberFormatException e) {
+            fail("scanf: invalid integer '" + token + "'.");
+            return 0;
+        }
+    }
+
+    private String decodeString(String encoded) {
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < encoded.length(); i++) {
+            char c = encoded.charAt(i);
+            if (c == '\\' && i + 1 < encoded.length()) {
+                char next = encoded.charAt(++i);
+                out.append(switch (next) {
+                    case 'n' -> '\n';
+                    case 't' -> '\t';
+                    case 'r' -> '\r';
+                    case '0' -> '\0';
+                    case '"' -> '"';
+                    case '\\' -> '\\';
+                    default -> next;
+                });
+            } else {
+                out.append(c);
+            }
+        }
+        return out.toString();
+    }
+
+    private void recordSnapshot(Frame frame, String function, String line, String action) {
+        if (!tracing) {
+            return;
+        }
+        if (snapshots.size() >= MAX_TRACE_STEPS) {
+            truncated = true;
+            return;
+        }
+        List<DebugTrace.Variable> variables = new ArrayList<>();
+        collectVariables(globals, variables);
+        collectVariables(frame.locals, variables);
+        snapshots.add(new DebugTrace.Snapshot(
+                snapshots.size() + 1, function, line.trim(), action, variables, stdout.toString()));
+    }
+
+    private void collectVariables(Map<String, Cell> scope, List<DebugTrace.Variable> out) {
+        for (Map.Entry<String, Cell> entry : scope.entrySet()) {
+            String name = entry.getKey();
+            if (isTemp(name)) {
+                continue;
+            }
+            Cell cell = entry.getValue();
+            String type = cell.type.name().toLowerCase();
+            if (cell.array) {
+                StringBuilder sb = new StringBuilder("[");
+                for (int i = 0; i < cell.values.size(); i++) {
+                    if (i > 0) {
+                        sb.append(", ");
+                    }
+                    sb.append(cell.values.get(i).display());
+                }
+                sb.append(']');
+                out.add(new DebugTrace.Variable(name, type, sb.toString(), true));
+            } else {
+                out.add(new DebugTrace.Variable(name, type, cell.value.display(), false));
+            }
+        }
+    }
+
+    private boolean isTemp(String name) {
+        if (name.length() < 2 || name.charAt(0) != 't') {
+            return false;
+        }
+        for (int i = 1; i < name.length(); i++) {
+            if (!Character.isDigit(name.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private String declareAction(String line) {
+        String body = line.substring("declare ".length()).trim();
+        String[] parts = body.split("\\s+");
+        String target = parts.length == 2 ? parts[1] : body;
+        return "声明 " + target;
+    }
+
+    private String assignAction(String line) {
+        int equals = line.indexOf(" = ");
+        if (equals < 0) {
+            return "执行";
+        }
+        String target = line.substring(0, equals).trim();
+        if (isTemp(target)) {
+            return "计算";
+        }
+        return "赋值 " + target;
+    }
+
+    private boolean isTempAssignment(String line) {
+        int equals = line.indexOf(" = ");
+        if (equals < 0) {
+            return false;
+        }
+        return isTemp(line.substring(0, equals).trim());
     }
 
     private void declare(Map<String, Cell> scope, String line) {
@@ -385,13 +632,17 @@ public class VirtualMachine {
         }
     }
 
-    private record RuntimeValue(Ast.Type type, int raw) {
+    private record RuntimeValue(Ast.Type type, int raw, String text) {
         static RuntimeValue of(Ast.Type type, int raw) {
-            return new RuntimeValue(type, raw);
+            return new RuntimeValue(type, raw, null);
+        }
+
+        static RuntimeValue ofString(String text) {
+            return new RuntimeValue(Ast.Type.STRING, 0, text);
         }
 
         static RuntimeValue defaultValue(Ast.Type type) {
-            return new RuntimeValue(type, 0);
+            return new RuntimeValue(type, 0, null);
         }
 
         int asInt() {
@@ -399,6 +650,9 @@ public class VirtualMachine {
         }
 
         String display() {
+            if (type == Ast.Type.STRING) {
+                return text == null ? "" : text;
+            }
             if (type == Ast.Type.BOOL) {
                 return raw == 0 ? "false" : "true";
             }
