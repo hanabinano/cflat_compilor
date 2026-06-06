@@ -48,19 +48,23 @@
 
         <div class="output-box" :class="{ 'tree-output': outputMode === 'lexer-tree' }">
           <div v-if="outputMode === 'lexer-tree'" class="token-tree">
-            <div class="tree-root">
-              <div class="tree-node root-node">
-                <span class="node-label">Lexer</span>
-                <span class="node-meta">{{ lexerTree.total }} tokens</span>
+            <div class="lexer-tree-graph" aria-label="词法分析树">
+              <div class="tree-root-row">
+                <div class="tree-node root-node">
+                  <span class="node-label">Lexer</span>
+                  <span class="node-meta">{{ lexerTree.total }} tokens</span>
+                </div>
               </div>
-              <div class="tree-children">
-                <div v-for="group in lexerTree.groups" :key="group.name" class="tree-group">
+
+              <div class="tree-branches">
+                <div v-for="group in lexerTree.groups" :key="group.name" class="tree-branch">
                   <div class="tree-node group-node">
                     <span class="node-label">{{ group.label }}</span>
                     <span class="node-meta">{{ group.tokens.length }}</span>
                   </div>
-                  <div class="tree-children">
-                    <div v-for="token in group.tokens" :key="token.key" class="tree-node token-node">
+
+                  <div class="token-leaves">
+                    <div v-for="token in group.tokens" :key="token.key" class="tree-node token-node leaf-node">
                       <span class="token-type">{{ token.type }}</span>
                       <span class="token-lexeme">{{ token.lexeme || 'EOF' }}</span>
                       <span class="node-meta">L{{ token.line }}:C{{ token.column }}</span>
