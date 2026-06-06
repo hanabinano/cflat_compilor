@@ -8,8 +8,6 @@
 ![Vite](https://img.shields.io/badge/Vite-6-646cff)
 ![Monaco Editor](https://img.shields.io/badge/Editor-Monaco-1f6feb)
 
-C♭ 是一个教学用的类 C 语言。这里的 `♭` 是五线谱里的降号 flat，因此 C♭ 不是 C#。本项目用于展示完整编译器流程：词法分析、语法分析、AST、语义分析、中间代码生成和虚拟机运行。
-
 ## 功能概览
 
 ```text
