@@ -213,6 +213,111 @@ h2 {
   word-break: break-word;
 }
 
+.output-box.tree-output {
+  border-color: #cad4cc;
+  background: #ffffff;
+  color: #1f2a24;
+}
+
+.token-tree {
+  display: grid;
+  gap: 16px;
+  padding: 14px;
+}
+
+.tree-root,
+.tree-group {
+  display: grid;
+  gap: 8px;
+}
+
+.tree-children {
+  display: grid;
+  gap: 7px;
+  margin-left: 18px;
+  padding-left: 14px;
+  border-left: 1px solid #d8e1da;
+}
+
+.tree-node {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  border: 1px solid #d8e1da;
+  border-radius: 6px;
+  background: #f8faf7;
+  padding: 6px 9px;
+}
+
+.root-node {
+  border-color: #315d4c;
+  background: #e8f1eb;
+}
+
+.group-node {
+  background: #f1f5f0;
+}
+
+.token-node {
+  display: grid;
+  grid-template-columns: minmax(84px, 0.8fr) minmax(70px, 1fr) auto;
+}
+
+.node-label,
+.token-type {
+  color: #23302a;
+  font-weight: 750;
+}
+
+.token-lexeme {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #315d4c;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+.node-meta {
+  margin-left: auto;
+  color: #6a766d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.token-table {
+  overflow: hidden;
+  border: 1px solid #d8e1da;
+  border-radius: 8px;
+}
+
+.table-title {
+  padding: 10px 12px;
+  border-bottom: 1px solid #d8e1da;
+  background: #f1f5f0;
+  font-weight: 800;
+}
+
+.table-row {
+  display: grid;
+  grid-template-columns: 52px minmax(100px, 1fr) minmax(80px, 1fr) 64px;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #edf1ed;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.table-row:last-child {
+  border-bottom: 0;
+}
+
+.table-head {
+  background: #fbfcf9;
+  color: #56625a;
+  font-family: inherit;
+  font-weight: 800;
+}
+
 @media (max-width: 980px) {
   .workspace {
     grid-template-columns: 1fr;
@@ -240,5 +345,14 @@ h2 {
 
   .toolbar button {
     flex: 1 1 140px;
+  }
+
+  .token-node,
+  .table-row {
+    grid-template-columns: 1fr;
+  }
+
+  .node-meta {
+    margin-left: 0;
   }
 }

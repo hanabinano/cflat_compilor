@@ -46,8 +46,47 @@
         <label class="stdin-label" for="stdin">标准输入</label>
         <textarea id="stdin" v-model="stdin" class="stdin" spellcheck="false" placeholder="scanf 后续版本启用" />
 
-        <div class="output-box">
-          <pre>{{ formattedOutput }}</pre>
+        <div class="output-box" :class="{ 'tree-output': outputMode === 'lexer-tree' }">
+          <div v-if="outputMode === 'lexer-tree'" class="token-tree">
+            <div class="tree-root">
+              <div class="tree-node root-node">
+                <span class="node-label">Lexer</span>
+                <span class="node-meta">{{ lexerTree.total }} tokens</span>
+              </div>
+              <div class="tree-children">
+                <div v-for="group in lexerTree.groups" :key="group.name" class="tree-group">
+                  <div class="tree-node group-node">
+                    <span class="node-label">{{ group.label }}</span>
+                    <span class="node-meta">{{ group.tokens.length }}</span>
+                  </div>
+                  <div class="tree-children">
+                    <div v-for="token in group.tokens" :key="token.key" class="tree-node token-node">
+                      <span class="token-type">{{ token.type }}</span>
+                      <span class="token-lexeme">{{ token.lexeme || 'EOF' }}</span>
+                      <span class="node-meta">L{{ token.line }}:C{{ token.column }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="token-table">
+              <div class="table-title">Token 明细</div>
+              <div class="table-row table-head">
+                <span>序号</span>
+                <span>类型</span>
+                <span>文本</span>
+                <span>位置</span>
+              </div>
+              <div v-for="token in lexerTree.tokens" :key="`row-${token.key}`" class="table-row">
+                <span>{{ token.index }}</span>
+                <span>{{ token.type }}</span>
+                <span>{{ token.lexeme || 'EOF' }}</span>
+                <span>{{ token.line }}:{{ token.column }}</span>
+              </div>
+            </div>
+          </div>
+          <pre v-else>{{ formattedOutput }}</pre>
         </div>
       </aside>
     </section>
@@ -115,6 +154,7 @@ const stdin = ref('')
 const loading = ref(false)
 const outputTitle = ref('运行结果')
 const output = ref('点击上方按钮查看 Token、AST、三地址码或程序输出。')
+const outputMode = ref('text')
 const hasError = ref(false)
 
 const statusText = computed(() => {
@@ -129,6 +169,69 @@ const formattedOutput = computed(() => {
   return JSON.stringify(output.value, null, 2)
 })
 
+const lexerTree = computed(() => {
+  const tokens = Array.isArray(output.value)
+    ? output.value.map((token, index) => ({
+        ...token,
+        index: index + 1,
+        key: `${index}-${token.type}-${token.line}-${token.column}-${token.lexeme}`
+      }))
+    : []
+
+  const groups = [
+    { name: 'keywords', label: '关键字 Keywords', matcher: token => token.type.startsWith('KW_') },
+    { name: 'identifiers', label: '标识符 Identifiers', matcher: token => token.type === 'IDENTIFIER' },
+    { name: 'literals', label: '字面量 Literals', matcher: token => token.type.endsWith('_LITERAL') },
+    {
+      name: 'operators',
+      label: '运算符 Operators',
+      matcher: token =>
+        [
+          'PLUS',
+          'MINUS',
+          'STAR',
+          'SLASH',
+          'PERCENT',
+          'LT',
+          'LTE',
+          'GT',
+          'GTE',
+          'EQEQ',
+          'NEQ',
+          'ANDAND',
+          'OROR',
+          'BANG',
+          'ASSIGN'
+        ].includes(token.type)
+    },
+    {
+      name: 'delimiters',
+      label: '分隔符 Delimiters',
+      matcher: token =>
+        [
+          'LPAREN',
+          'RPAREN',
+          'LBRACE',
+          'RBRACE',
+          'LBRACKET',
+          'RBRACKET',
+          'SEMICOLON',
+          'COMMA'
+        ].includes(token.type)
+    },
+    { name: 'eof', label: '结束符 EOF', matcher: token => token.type === 'EOF' }
+  ].map(group => ({
+    ...group,
+    tokens: tokens.filter(group.matcher)
+  }))
+
+  return {
+    total: tokens.length,
+    tokens,
+    groups: groups.filter(group => group.tokens.length > 0)
+  }
+})
+
 function loadExample() {
   const found = examples.find(item => item.name === selectedExample.value)
   if (found) {
@@ -139,6 +242,7 @@ function loadExample() {
 async function handleAction(type) {
   loading.value = true
   hasError.value = false
+  outputMode.value = 'text'
   try {
     const result =
       type === 'lexer'
@@ -156,7 +260,8 @@ async function handleAction(type) {
 
     const payload = result.payload
     if (type === 'lexer') {
-      outputTitle.value = 'Token 列表'
+      outputTitle.value = '词法分析树'
+      outputMode.value = 'lexer-tree'
       output.value = payload.tokens
     } else if (type === 'parser') {
       outputTitle.value = 'AST'
@@ -182,6 +287,7 @@ async function handleAction(type) {
 
 function showError(payload) {
   hasError.value = true
+  outputMode.value = 'text'
   outputTitle.value = '错误信息'
   output.value = `stage: ${payload.stage || 'UNKNOWN'}
 message: ${payload.message || 'Unknown error'}
