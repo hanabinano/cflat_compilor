@@ -1,11 +1,43 @@
 <template>
   <main class="app-shell">
+    <header class="app-header">
+      <div class="brand-block">
+        <div class="brand-mark">C♭</div>
+        <div>
+          <p class="eyebrow">Compiler Studio</p>
+          <h1>C♭ 编译器课程展示台</h1>
+        </div>
+      </div>
+      <div class="header-meta">
+        <span class="meta-pill">
+          <FileCode2 :size="15" />
+          {{ codeStats.lines }} 行
+        </span>
+        <span class="meta-pill">
+          <Activity :size="15" />
+          {{ codeStats.characters }} 字符
+        </span>
+      </div>
+    </header>
+
+    <section class="pipeline-strip" aria-label="compiler pipeline">
+      <div
+        v-for="stage in pipelineStages"
+        :key="stage.id"
+        class="pipeline-step"
+        :class="{ active: activeStage === stage.id, done: completedStages.includes(stage.id) }"
+      >
+        <span class="step-index">{{ stage.index }}</span>
+        <span>{{ stage.label }}</span>
+      </div>
+    </section>
+
     <section class="workspace">
       <div class="editor-pane">
         <header class="topbar">
           <div>
-            <p class="eyebrow">Cflat Compiler Lab</p>
-            <h1>C♭ 编译器实验台</h1>
+            <p class="eyebrow">Source</p>
+            <h2>代码编辑器</h2>
           </div>
           <select v-model="selectedExample" class="example-select" @change="loadExample">
             <option v-for="item in examples" :key="item.name" :value="item.name">{{ item.name }}</option>
@@ -37,13 +69,32 @@
       <aside class="result-pane">
         <div class="panel-header">
           <div>
-            <p class="eyebrow">Output</p>
+            <p class="eyebrow">{{ outputStageLabel }}</p>
             <h2>{{ outputTitle }}</h2>
           </div>
-          <span class="status" :class="{ error: hasError, busy: loading }">{{ statusText }}</span>
+          <span class="status" :class="{ error: hasError, busy: loading }">
+            <Loader2 v-if="loading" :size="14" class="spin" />
+            <AlertTriangle v-else-if="hasError" :size="14" />
+            <CheckCircle2 v-else :size="14" />
+            {{ statusText }}
+          </span>
         </div>
 
-        <label class="stdin-label" for="stdin">标准输入</label>
+        <div class="result-summary">
+          <div>
+            <span class="summary-label">阶段</span>
+            <strong>{{ outputTitle }}</strong>
+          </div>
+          <div>
+            <span class="summary-label">状态</span>
+            <strong>{{ statusText }}</strong>
+          </div>
+        </div>
+
+        <label class="stdin-label" for="stdin">
+          <TerminalSquare :size="15" />
+          标准输入
+        </label>
         <textarea id="stdin" v-model="stdin" class="stdin" spellcheck="false" placeholder="scanf 后续版本启用" />
 
         <div class="output-box" :class="{ 'tree-output': outputMode === 'lexer-tree' }">
@@ -99,9 +150,28 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { Binary, Braces, ListTree, Play } from 'lucide-vue-next'
+import {
+  Activity,
+  AlertTriangle,
+  Binary,
+  Braces,
+  CheckCircle2,
+  FileCode2,
+  ListTree,
+  Loader2,
+  Play,
+  TerminalSquare
+} from 'lucide-vue-next'
 import CodeEditor from './components/CodeEditor.vue'
 import * as compilerApi from './api/compilerApi'
+
+const pipelineStages = [
+  { id: 'lexer', index: '01', label: '词法分析' },
+  { id: 'parser', index: '02', label: '语法分析' },
+  { id: 'semantic', index: '03', label: '语义检查' },
+  { id: 'ir', index: '04', label: '中间代码' },
+  { id: 'vm', index: '05', label: '虚拟机运行' }
+]
 
 const examples = [
   {
@@ -160,10 +230,22 @@ const outputTitle = ref('运行结果')
 const output = ref('点击上方按钮查看 Token、AST、三地址码或程序输出。')
 const outputMode = ref('text')
 const hasError = ref(false)
+const activeStage = ref('vm')
+const completedStages = ref([])
 
 const statusText = computed(() => {
   if (loading.value) return '处理中'
   return hasError.value ? '错误' : '就绪'
+})
+
+const codeStats = computed(() => ({
+  lines: code.value.split('\n').length,
+  characters: code.value.length
+}))
+
+const outputStageLabel = computed(() => {
+  const found = pipelineStages.find(stage => stage.id === activeStage.value)
+  return found?.label || 'Output'
 })
 
 const formattedOutput = computed(() => {
@@ -240,6 +322,12 @@ function loadExample() {
   const found = examples.find(item => item.name === selectedExample.value)
   if (found) {
     code.value = found.code
+    hasError.value = false
+    activeStage.value = 'vm'
+    completedStages.value = []
+    outputMode.value = 'text'
+    outputTitle.value = '运行结果'
+    output.value = '点击上方按钮查看 Token、AST、三地址码或程序输出。'
   }
 }
 
@@ -247,6 +335,8 @@ async function handleAction(type) {
   loading.value = true
   hasError.value = false
   outputMode.value = 'text'
+  activeStage.value = stageForAction(type)
+  completedStages.value = []
   try {
     const result =
       type === 'lexer'
@@ -267,15 +357,19 @@ async function handleAction(type) {
       outputTitle.value = '词法分析树'
       outputMode.value = 'lexer-tree'
       output.value = payload.tokens
+      completedStages.value = ['lexer']
     } else if (type === 'parser') {
       outputTitle.value = 'AST'
       output.value = payload.ast
+      completedStages.value = ['lexer', 'parser']
     } else if (type === 'compile') {
       outputTitle.value = '三地址码'
       output.value = payload.ir.join('\n')
+      completedStages.value = ['lexer', 'parser', 'semantic', 'ir']
     } else {
       outputTitle.value = '程序运行结果'
       output.value = `stdout:\n${payload.stdout || '(empty)'}\nstderr:\n${payload.stderr || '(empty)'}\nexitCode: ${payload.exitCode}\n\nIR:\n${payload.ir.join('\n')}`
+      completedStages.value = ['lexer', 'parser', 'semantic', 'ir', 'vm']
     }
   } catch (error) {
     showError({
@@ -297,5 +391,12 @@ function showError(payload) {
 message: ${payload.message || 'Unknown error'}
 line: ${payload.line ?? 0}
 column: ${payload.column ?? 0}`
+}
+
+function stageForAction(type) {
+  if (type === 'lexer') return 'lexer'
+  if (type === 'parser') return 'parser'
+  if (type === 'compile') return 'ir'
+  return 'vm'
 }
 </script>
